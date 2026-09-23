@@ -1,15 +1,60 @@
+# =========================
+# Vagrant
+# =========================
 .vagrant/
-*.log
+*.box
+
+# =========================
+# Ansible
+# =========================
+# Retry-filer från misslyckade körningar
 *.retry
-__pycache__/
+
+# Temporära filer och loggar
+*.log
+ansible.log
+
+# Känsliga filer (lösenord, privata nycklar och oskyddade hemligheter)
+*.vault_pass
+.vault_pass*
+*.key
+*.pem
+id_rsa*
+id_ed25519*
+
+# Externt nedladdade roller och samlingar
+# (Checka in requirements.yml istället för de faktiska rollerna)
+roles/galaxy/
+roles/vendor/
+roles/external/
+collections/ansible_collections/
+
+# Ansible cache
+.ansible/
+
+# =========================
+# Editor & OS Artifacts
+# =========================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # VS Code
-# .vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 
-# Ansible Vault
-*.vault
-vault_pass.txt
+# PyCharm / JetBrains
+.idea/
 
-# Linux
-*.swp
+# Backup-filer
 *~
+*.swp
+*.swo
