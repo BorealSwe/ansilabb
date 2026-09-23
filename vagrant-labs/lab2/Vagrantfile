@@ -1,0 +1,57 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+VAGRANTFILE_API_VERSION = "2"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+  # Gemensam bas-box
+  config.vm.box = "generic/rocky9"
+  config.ssh.insert_key = false
+
+  # VirtualBox-inställningar som standard för alla noder
+  config.vm.provider :virtualbox do |v|
+    v.memory = 1024
+    v.cpus = 1
+    v.linked_clone = true
+  end
+
+  # ========================================================
+  # ANSIBLE CONTROL NODE
+  # ========================================================
+  config.vm.define "control" do |ctrl|
+    ctrl.vm.hostname = "orc-control.test"
+    ctrl.vm.network "private_network", ip: "192.168.56.10"
+
+    # Dela en lokal katalog ("./ansible") så du kan koda på värddatorn
+    ctrl.vm.synced_folder "./ansible", "/ansible", create: true
+
+    # Provisioning: Installera Ansible & SSH-verktyg
+    ctrl.vm.provision "shell", inline: <<-SHELL
+      dnf install -y epel-release
+      dnf install -y ansible sshpass
+
+      # Länka Vagrants standardnyckel så Ansible enkelt kan använda den
+      mkdir -p /home/vagrant/.ssh
+      cp /vagrant_insecure_key /home/vagrant/.ssh/id_rsa 2>/dev/null || true
+      chown -R vagrant:vagrant /home/vagrant/.ssh
+    SHELL
+  end
+
+  # ========================================================
+  # MANAGED NODES (Target hosts)
+  # ========================================================
+  NODES = {
+    "app1" => { :ip => "192.168.56.7", :hostname => "orc-app1.test" },
+    "app2" => { :ip => "192.168.56.8", :hostname => "orc-app2.test" },
+    "db"   => { :ip => "192.168.56.9", :hostname => "orc-db.test" }
+  }
+
+  NODES.each do |name, opt|
+    config.vm.define name do |node|
+      node.vm.hostname = opt[:hostname]
+      node.vm.network "private_network", ip: opt[:ip]
+      # Ingen synkad mapp behövs på målnoderna
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+    end
+  end
+end
