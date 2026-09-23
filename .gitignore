@@ -1,0 +1,15 @@
+.vagrant/
+*.log
+*.retry
+__pycache__/
+
+# VS Code
+# .vscode/
+
+# Ansible Vault
+*.vault
+vault_pass.txt
+
+# Linux
+*.swp
+*~
