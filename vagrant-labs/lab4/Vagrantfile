@@ -1,0 +1,31 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  nodes = [
+    { name: "rocky1",  box: "generic/rocky9",          ip: "192.168.57.10" },
+    { name: "rocky2",  box: "generic/rocky9",          ip: "192.168.57.11" },
+    { name: "ubuntu1", box: "generic-x64/ubuntu2204",  ip: "192.168.57.12" }
+  ]
+
+  nodes.each do |node_info|
+    config.vm.define node_info[:name] do |node|
+      node.vm.box = node_info[:box]
+      node.vm.hostname = node_info[:name]
+      node.vm.network "private_network", ip: node_info[:ip]
+
+      # Inställningar för KVM / libvirt
+      node.vm.provider :libvirt do |lv|
+        lv.memory = 1024
+        lv.cpus = 1
+      end
+
+      # Inställningar för VirtualBox
+      node.vm.provider :virtualbox do |vb|
+        vb.name = node_info[:name]
+        vb.memory = 1024
+        vb.cpus = 1
+      end
+    end
+  end
+end
