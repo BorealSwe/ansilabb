@@ -1,0 +1,137 @@
+---
+# ==============================================================================
+# PLAY-DEFINITION
+# ==============================================================================
+# Modulerna i netapp.ontap exekveras som lokala Python-skript på kontrollnoden
+# (laptop/bastion) och skickar HTTPS REST API-anrop direkt mot klustrets
+# Cluster Management LIF (172.0.10.100 på vår A220 eller 192.168.0.101 i kurslabben).
+# Därför sätts 'hosts' till localhost.
+- hosts: localhost
+  gather_facts: false # Stänger av Linux-faktainsamling mot localhost för snabbare start
+  name: Provision NAS Storage
+
+  # ============================================================================
+  # COLLECTIONS
+  # ============================================================================
+  # Importerar NetApp-samlingen så att vi kan anropa modulerna direkt med kortnamn
+  # (t.ex. 'na_ontap_volume' i stället för 'netapp.ontap.na_ontap_volume').
+  collections:
+    - netapp.ontap
+
+  # ============================================================================
+  # MODULE DEFAULTS (DRY - Don't Repeat Yourself)
+  # ============================================================================
+  # Injicerar gemensamma parametrar automatiskt till alla moduler i gruppen
+  # 'netapp_ontap'.
+  # Observera: 'vserver' ligger här eftersom samtliga tasks i denna playbook
+  # agerar inom ramen för en specifik Storage VM (tenant).
+  module_defaults:
+    group/netapp.ontap.netapp_ontap:
+      hostname: "{{ netapp_hostname }}"       # Pointers till klustrets mgmt-adress
+      username: "{{ netapp_username }}"       # Klusteradministratör (admin)
+      password: "{{ netapp_password }}"       # Läses in säkert via vars_prompt
+      vserver: "{{ vserver }}"                 # Binder alla moduler till rätt SVM (t.ex. svm_proxmox)
+      https: true                             # Krypterad REST API-kommunikation (port 443)
+      validate_certs: false                   # Tillåter labbmiljöns självsignerade certifikat
+      use_rest: auto                          # Väljer REST API automatiskt (ONTAP 9.9.1+ / 9.16.1)
+
+  # ============================================================================
+  # INTERAKTIV CREDENTIAL-INMATNING (Secret Management)
+  # ============================================================================
+  # Exekveras direkt vid playbook-start innan några uppgifter körs.
+  # Sparar lösenordet temporärt i minnet så att det aldrig checkas in i Git.
+  vars_prompt:
+    - name: "netapp_password"
+      prompt: "Enter the NetApp Admin Password"
+      private: true                           # Döljer inmatningen i terminalen
+      confirm: true                           # Bekräfta lösenordet för att eliminera felskrivningar
+
+  # ============================================================================
+  # EXTERNA VARIABELFILER
+  # ============================================================================
+  # Läser in miljö- och volymspecifika variabler från separat YAML-fil.
+  # Perfekt för att återanvända samma playbook i olika miljöer (A220 vs kurslabb).
+  vars_files:
+    - ./nas_vars.yml
+
+  # ============================================================================
+  # TASKS: PROVISIONERINGSFLÖDET
+  # ============================================================================
+  tasks:
+
+    # --------------------------------------------------------------------------
+    # Task 1: Skapa Export Policy
+    # --------------------------------------------------------------------------
+    # Skapar en tom container för säkerhetsregler under angiven SVM.
+    # I ONTAP innebär en tom policy att all nätverksaccess nekas som standard.
+    # Motsvarande CLI:
+    #   a220::> vserver export-policy create -vserver svm_proxmox -policyname vol1_policy
+    # --------------------------------------------------------------------------
+    - name: Create Export Policy
+      na_ontap_export_policy:
+        state: present                        # Säkerställer att policyn existerar (idempotent)
+        name: "{{ volname }}_policy"          # T.ex. vm_data_01_policy eller vol1_policy
+
+    # --------------------------------------------------------------------------
+    # Task 2: Skapa Export Policy-regel (NFS-villkorad)
+    # --------------------------------------------------------------------------
+    # Denna körs endast om variabeln 'protocol' i nas_vars.yml är satt till 'nfs'.
+    # - client_match: Tillåter klientens IP/subnät (t.ex. 10.1.31.0/24 på VLAN 301).
+    # - super_user_security: sys förhindrar root-squash så att root (UID 0) inte
+    #   mappas om till nobody/anon (65534). Kritiskt för Proxmox/Linux VM-driftsättning!
+    # Motsvarande CLI:
+    #   a220::> vserver export-policy rule create -vserver svm_proxmox \
+    #           -policyname vol1_policy -clientmatch 10.1.31.0/24 \
+    #           -rorule sys -rwrule sys -superuser sys -protocol nfs
+    # --------------------------------------------------------------------------
+    - name: Set Up Export Policy Rules
+      na_ontap_export_policy_rule:
+        state: present
+        policy_name: "{{ volname }}_policy"
+        client_match: "{{ client_match }}"    # Klient-IP eller CIDR-block
+        ro_rule: sys                          # Read-only behörighet via AUTH_SYS
+        rw_rule: sys                          # Read-write behörighet via AUTH_SYS
+        super_user_security: sys              # Root-åtkomst bevaras
+      when: protocol.lower() == 'nfs'         # Exekveras enbart för NFS-volymer
+
+    # --------------------------------------------------------------------------
+    # Task 3: Skapa FlexVol och montera i namnrymden
+    # --------------------------------------------------------------------------
+    # Skapar själva volymen på det angivna aggregatet (t.ex. aggr1_01 på Node 1):
+    # - space_guarantee: "none" aktiverar Thin Provisioning (best practice på flash/AFF).
+    #   WAFL allokerar 4KB-block först vid skrivning, vilket låter inline-komprimering
+    #   och deduplicering arbeta optimalt.
+    # - junction_path: Monterar volymen i SVM:ens logiska rotkatalogträd (/volname).
+    # - policy: Applicerar exportpolicyn som skapades ovan.
+    # Motsvarande CLI:
+    #   a220::> volume create -vserver svm_proxmox -volume vol1 \
+    #           -aggregate aggr1_01 -size 10g -space-guarantee none \
+    #           -policy vol1_policy -junction-path /vol1 -security-style unix
+    # --------------------------------------------------------------------------
+    - name: Create Volume
+      na_ontap_volume:
+        state: present
+        name: "{{ volname }}"                 # Volymens namn
+        aggregate_name: "{{ aggr_name }}"     # Målaggregat (Local Tier)
+        size: "{{ size }}"                    # Storlek
+        size_unit: gb                         # Enhet: Gigabyte
+        policy: "{{ volname }}_policy"        # Knyter ihop volymen med exportpolicyn
+        junction_path: "/{{ volname }}"       # Monteringspunkt i SVM-namnrymden
+        space_guarantee: "none"               # Tunn provisionering utan blockreservation
+        volume_security_style: unix           # Filrättigheter i UNIX-stil (mode bits)
+
+    # --------------------------------------------------------------------------
+    # Task 4: Skapa SMB/CIFS Share (CIFS-villkorad)
+    # --------------------------------------------------------------------------
+    # Denna körs endast om variabeln 'protocol' i nas_vars.yml är satt till 'cifs'.
+    # Exponerar samma junction-path som en Windows SMB-utdelning.
+    # Motsvarande CLI:
+    #   cluster1::> vserver cifs share create -vserver smb_svm \
+    #               -share-name vol1 -path /vol1
+    # --------------------------------------------------------------------------
+    - name: Create CIFS Share
+      na_ontap_cifs:
+        state: present
+        share_name: "{{ volname }}"           # Utdelningens namn (\\server\share)
+        path: "/{{ volname }}"                # Sökvägen i SVM-namnrymden som delas ut
+      when: protocol.lower() == 'cifs'        # Exekveras enbart för Windows/CIFS-utdelningar

@@ -1,0 +1,81 @@
+---
+# ==============================================================================
+# PLAY-DEFINITION
+# ==============================================================================
+# hosts: localhost
+# Vi kör koden lokalt på kontrollnoden (bastion/laptop) eftersom netapp.ontap-
+# modulerna exekverar lokala Python-skript som gör HTTPS REST-anrop mot ONTAP,
+# snarare än att SSH:a in i ONTAP CLI.
+- hosts: localhost
+  gather_facts: false # Stänger av lokal Linux-faktainsamling för att playbooken ska starta direkt
+  name: Connectivity Test & Display ONTAP Info
+
+  # ============================================================================
+  # COLLECTIONS
+  # ============================================================================
+  # Informerar Ansible om att moduler utan fullständigt namn (FQCN) ska sökas
+  # i netapp.ontap-samlingen. Gör att vi kan skriva 'na_ontap_rest_info' direkt.
+  collections:
+    - netapp.ontap
+
+  # ============================================================================
+  # MODULE DEFAULTS (Best Practice för NetApp Playbooks)
+  # ============================================================================
+  # Definierar gemensamma parametrar för alla ONTAP-moduler i playet.
+  # Alla moduler i gruppen 'netapp_ontap' ärver automatiskt dessa värden,
+  # så vi slipper upprepa credentials under varje enskild task!
+  module_defaults:
+    group/netapp.ontap.netapp_ontap:
+      hostname: "{{ netapp_hostname }}" # Hämtas från vars nedan
+      username: "{{ netapp_username }}" # Hämtas från vars nedan
+      password: "{{ netapp_password }}" # Hämtas interaktivt via vars_prompt
+      https: true # Krypterad REST API-kommunikation (port 443)
+      validate_certs: false # Ignorera självsignerade labb-certifikat
+      use_rest: auto # Använder REST API om ONTAP-versionen stödjer det, annars ZAPI (ONTAPI)
+
+  # ============================================================================
+  # INTERAKTIV INMATNING AV LÖSENORD (Secret Management)
+  # ============================================================================
+  # Frågar administratören efter lösenordet vid körning.
+  # Lösenordet döljs i terminalen och sparas aldrig i klartext i källkoden.
+  vars_prompt:
+    - name: "netapp_password"
+      prompt: "Enter the NetApp Admin Password"
+      private: true # Döljer tecknen när du knappar in dem i terminalen
+      confirm: true # Tvingar dig att skriva det två gånger för att undvika felskrivning
+
+  # ============================================================================
+  # VARIABLER FÖR ANSLUTNING
+  # ============================================================================
+  # I kurslabben pekar detta mot övningsklustret.
+  # För vår fysiska rigg ändrar vi netapp_hostname till kluster-mgmt på A220: 172.0.10.100
+  vars:
+    netapp_hostname: cluster1.demo.netapp.com # Motsvarar Cluster Mgmt LIF 192.168.0.101 i labben
+    netapp_username: admin # ONTAP:s inbyggda klusteradministratörskonto
+
+  # ============================================================================
+  # TASKS
+  # ============================================================================
+  tasks:
+    # --------------------------------------------------------------------------
+    # Task 1: Samla in SVM-fakta via ONTAP REST API
+    # --------------------------------------------------------------------------
+    # Under huven gör denna modul en GET-förfrågan mot /api/svm/svms.
+    # I ONTAP clustershell motsvarar detta exakt:
+    #   cluster1::> vserver show
+    # Eftersom vi har module_defaults behöver vi bara ange 'gather_subset'.
+    # --------------------------------------------------------------------------
+    - name: "Collect ONTAP info"
+      na_ontap_rest_info:
+        gather_subset: "svm/svms" # Frågar efter listan över alla Vservers/Storage VMs
+      register: info # Sparar det fullständiga REST-svaret i variabeln 'info'
+
+    # --------------------------------------------------------------------------
+    # Task 2: Printa ut JSON-svaret i terminalen
+    # --------------------------------------------------------------------------
+    # debug tar emot variabeln info via Jinja2 {{ info }} och dumpar ut
+    # hela datastrukturen på skärmen (records, statuskoder, SVM-objekt).
+    # --------------------------------------------------------------------------
+    - name: Print ONTAP Response
+      debug:
+        msg: "{{ info }}"
